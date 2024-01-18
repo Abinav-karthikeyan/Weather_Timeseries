@@ -1,0 +1,692 @@
+---
+title: "R Notebook"
+output:
+  word_document: default
+  html_notebook: default
+  pdf_document: default
+---
+
+
+Firstly Let us aggregate average weather data for the provided geographic coordinates(51.46613822530426",-0.21527848844810715).The coordinates correspond to:
+
+```{r}
+library(tidygeocoder)
+
+addr = reverse_geo(lat =51.46613822530426, long = -0.21527848844810715 , method = 'osm')
+
+print(paste("Coordinates Correspond to " , addr[,3] ,sep = ":"))
+
+
+```
+For the given set of coordinates, we go about obtaining a year long weather data from the dates (23-11-2022 to 23-11-2023). Due to potential API limits restriction on the plan I'm using, I am unable to query additional data. We aim to extract hourly data across these days. Two different sources are used.
+
+The First source comes from an API called Meteostat. Due to the overhaul of API calls, I have stored the queried results into a CSV file for future use. Although, this is the code structure used to extract and store the hourly weather data for the date range.
+
+```{r}
+
+url <- "https://meteostat.p.rapidapi.com/point/hourly"
+
+column_names <- c("time","temp","dwpt","rhum","prcp","snow","wdir","wspd","wpgt","pres","tsun","coco")
+
+weather_yearly<- data.frame(matrix(ncol = length(column_names), nrow = 0))
+
+colnames(weather_yearly) <- column_names
+
+View(weather_yearly)
+
+start_date = as.Date("2022-11-23")
+
+end_date = as.Date("2023-11-23")
+
+for (i in seq(start_date, end_date, 1)) {
+  current_day <- as.character(as.Date(i))
+  queryString <- list(
+    lat = "51.46613822530426",
+    lon = "-0.21527848844810715",
+    start = current_day,
+    end = current_day
+  )
+  
+  response <- GET(url, query = queryString, 
+                  add_headers('X-RapidAPI-Key' = '968d71ce5cmshddf2188c4c2c408p111656jsn9bcb0a0aa970', 
+                              'X-RapidAPI-Host' = 'meteostat.p.rapidapi.com'), 
+                  content_type("application/octet-stream"))
+  
+  
+    json_list <- fromJSON(content(response, "text"))
+    weather <- json_list$data
+    weather_yearly <- rbind(weather_yearly, weather)
+  
+}
+
+write.csv(weather_yearly, "Yearly_Weather.csv")
+
+```
+
+Now moving on to the second API, I extract data from a data source called "World Weather Online". Although this does'nt seem to have exhausted the calls limit, I have stored it into a CSV as well to ensure data reproductiblity.
+
+```{r}
+
+weather_yearly_new <- data.frame(matrix(ncol = 30))
+
+url <- "https://api.worldweatheronline.com/premium/v1/past-weather.ashx"
+
+
+for (i in seq(start_date, end_date, 1)) 
+{
+  current_day <- as.character(as.Date(i))
+
+queryString <- list(
+  date = current_day,
+  q = "51.46613822530426,-0.21527848844810715",
+  lang = "en",
+  includelocation = "yes",
+  format = "json",
+  tp = 1,
+  key = "760c086767ae46f39d7120303232611"
+)
+
+response <- VERB("GET", url, query = queryString)
+
+json_list <-fromJSON(content(response, "text"))
+
+stage_curr <- json_list$data$weather$hourly[[1]]
+
+colnames(weather_yearly_new)<-c(colnames(stage_curr))
+
+weather_yearly_new <- rbind(weather_yearly_new, stage_curr)
+
+}
+
+write.csv(weather_yearly, "Yearly_Weather2.csv")
+
+```
+
+
+Loading the stored CSV's to ensure reproductibility. As with APIs, there can be issues of reproductiblity although locally seeding can help. As such I go on to load the stored versions of the aggregated data.
+
+```{r}
+
+#Cleaning Dates format for second source
+
+weather_yearly_new = read.csv("C:\\Users\\abhin\\OneDrive\\Documents\\Course Content\\Predictive Analytics\\Yearly_Weather2.csv")
+
+weather_yearly_new$date = c(0)
+
+date_vector <- seq(start_date, end_date, by = "days")
+
+date_vector_rep <- rep(date_vector , each = 24)
+
+weather_yearly_new$date = date_vector_rep
+
+time_stamps <- seq(from = as.POSIXct("00:00:00", format="%H:%M:%S"), to = as.POSIXct("23:00:00", format="%H:%M:%S"), by = "1 hour")
+
+time_stamps <- format(time_stamps, "%H:%M:%S")
+
+time_stamps_rep <- rep(time_stamps, nrow(weather_yearly_new)/24)
+
+weather_yearly_new$time = time_stamps_rep
+
+weather_yearly_new$date = paste( weather_yearly_new$date ,weather_yearly_new$time , sep = " ")
+
+
+```
+
+
+```{r}
+df_new<- read.csv("C:\\Users\\abhin\\OneDrive\\Documents\\Course Content\\Predictive Analytics\\Yearly_Weather.csv")
+
+df_new = df_new[,c(2,3)]
+
+colnames(df_new) <- c("Date","Temp")
+
+weather_yearly_new$source = c("Source 1")
+
+df_new$source = c("Source 2")
+
+# Data frame that contains hourly temperature data acorss a year.
+
+combined_df <- merge(weather_yearly_new, df_new, by.x = "Date", by.y = "Date")
+
+
+
+# Preview of the Data to be analysed
+
+head(combined_df)
+
+
+```
+
+In case the above runs into issues, I can directly load from previous aggregations through API-calls.
+
+```{r}
+
+combined_df <- read.csv("C:\\Users\\abhin\\OneDrive\\Documents\\Course Content\\Predictive Analytics\\Temp_Ts.csv")
+
+```
+
+Let us plot a generic view of how the time series distribution is for each of the sources.
+
+```{r}
+library(plotly)
+
+base_plot = plot_ly(combined_df, type = 'scatter', mode = 'lines + markers', fill = 'tozeroy') %>%
+add_trace(x = ~Date, y = ~Temp.x, name = 'Temp.x', visible = TRUE) %>%
+add_trace(x = ~Date, y = ~Temp.y, name = 'Temp.y', visible = FALSE) %>%
+layout(
+xaxis = list(
+rangeslider = list(visible = TRUE),
+rangeselector = list(
+buttons = list(
+list(count = 1, label = "1D", step = "day", stepmode = "backward"),
+list(count = 1, label = "1m", step = "month", stepmode = "backward"),
+list(count = 6, label = "6m", step = "month", stepmode = "backward"),
+list(count = 1, label = "1y", step = "year", stepmode = "backward"),
+list(step = "all")
+))),
+updatemenus = list(
+list(
+type = "buttons",
+buttons = list(
+list(
+label = "Source 1",
+method = "update",
+args = list(list(visible = c(TRUE, FALSE)), list(title = "Source 1 Variation"))
+),
+list(
+label = "Source 2",
+method = "update",
+args = list(list(visible = c(FALSE, TRUE)), list(title = "Source 2 Variation"))
+),
+list(
+label = "Show Both Sources",
+method = "update",
+args = list(list(visible = c(TRUE, TRUE)), list(title = "Combined Comparison"))
+)
+)
+)
+)
+)
+
+base_plot%>%layout(title = list(text = "Temperature variation", xanchor = "left"))
+
+
+
+```
+
+On basic retrospection, we are able to adjust to the desired time interval based on days, months or even hourly data. By adjusting the slider, we are able to narrow down the interval of interest. The sources of interest can be toggled on / off to infer individual or comaprative behaviour.
+
+
+up next we wish to understand the seasonality component on each. A STL decomposition based on LOESS is done. LOESS is preferred due to it's sensitivity to outlier data, which a wetaher data like this would typically constitute. Moreover the smoothing can be optinally controlled as well. Based on the STL decomposition of temperatures from both sources, we then go on to plot them in a similar manner to pit the seasonal components of each side by side.
+
+```{r}
+
+
+install.packages("forecast")
+library(forecast)
+install.packages("ggfortify")
+library(ggfortify)
+
+ts_data1 <- ts(combined_df$Temp.x, frequency = 24)
+s1 = stl(ts_data1,s.window = "periodic")
+
+ts_data2 <- ts(combined_df$Temp.y, frequency = 24)
+s2 = stl(ts_data2,s.window = "periodic")
+
+
+seasonal_component1 <- s1$time.series[, "seasonal"]
+seasonal_component2 <- s2$time.series[, "seasonal"]
+
+df_seasonal <- data.frame("Date" = combined_df$Date, "S1" = seasonal_component1 , "S2" = seasonal_component2)
+
+# plotting seasonal components
+
+seasonal_plot = plot_ly(df_seasonal, type = 'scatter', mode = 'lines', fill = 'tozeroy') %>%
+  add_trace(x = ~Date, y = ~S1, name = 'Temp.x', visible = TRUE) %>%
+  add_trace(x = ~Date, y = ~S2, name = 'Temp.y', visible = FALSE) %>%
+  layout(
+  
+    xaxis = list(
+      rangeslider = list(visible = TRUE),
+      rangeselector = list(
+        buttons = list(
+          list(count = 1, label = "1D", step = "day", stepmode = "backward"),
+          list(count = 1, label = "1m", step = "month", stepmode = "backward"),
+          list(count = 6, label = "6m", step = "month", stepmode = "backward"),
+          list(count = 1, label = "1y", step = "year", stepmode = "backward"),
+          list(step = "all")
+        )
+      )
+    ),
+    updatemenus = list(
+      list(
+        type = "buttons",
+        x = 4.05,
+        y = 0.8,
+        buttons = list(
+          list(
+            label = "Source 1",
+            method = "update",
+            args = list(list(visible = c(TRUE, FALSE)), list(title = "Source 1 Seasonality"))
+          ),
+          list(
+            label = "Source 2",
+            method = "update",
+            args = list(list(visible = c(FALSE, TRUE)), list(title = "Source 2 Seasonality"))
+          ),
+          list(
+            label = "Show Both Sources",
+            method = "update",
+            args = list(list(visible = c(TRUE, TRUE)), list(title = "Combined Comparison of Seasonality"))
+          )
+        )
+      )
+    )
+  )
+
+seasonal_plot %>%layout(title = list(text = "Seasonal variation", xanchor = "left"))
+
+```
+
+Although clattered due to the volume of data, we are able to view a monthly or according to a period of interest. The overlaps indicate that the seasonal trends are pretty much consistent across both sources all over the year.
+
+We further wish to understand anomalies across both sources. We wish to follow two sources, firstly in terms of understanding the residuals from the STL decompoisition, as well as training an Unsupervised Isolation Forest model .
+
+Plotting the residuals:
+
+```{r}
+
+remainder_component1 <- s1$time.series[, "remainder"]
+remainder_component2 <- s2$time.series[, "remainder"]
+
+df_residual <- data.frame("Date" = combined_df$Date, "R1" = remainder_component1 , "R2" = remainder_component2)
+
+residual = plot_ly(df_residual, type = 'scatter', mode = 'lines', fill = 'tozeroy') %>%
+  add_trace(x = ~Date, y = ~R1, name = 'Temp.x', visible = TRUE) %>%
+  add_trace(x = ~Date, y = ~R2, name = 'Temp.y', visible = FALSE) %>%
+ 
+  layout(
+    xaxis = list(
+      rangeslider = list(visible = TRUE),
+      rangeselector = list(
+        buttons = list(
+          list(count = 1, label = "1D", step = "day", stepmode = "backward"),
+          list(count = 1, label = "1m", step = "month", stepmode = "backward"),
+          list(count = 6, label = "6m", step = "month", stepmode = "backward"),
+          list(count = 1, label = "1y", step = "year", stepmode = "backward"),
+          list(step = "all")
+        )
+      )
+    ),
+    updatemenus = list(
+      list(
+        type = "buttons",
+        x = 5.05,
+        y = 0.8,
+        buttons = list(
+          list(
+            label = "Source 1",
+            method = "update",
+            args = list(list(visible = c(TRUE, FALSE)), list(title = "Source 1 Residuals"))
+          ),
+          list(
+            label = "Source 2",
+            method = "update",
+            args = list(list(visible = c(FALSE, TRUE)), list(title = "Source 2 Residuals"))
+          ),
+          list(
+            label = "Show Both Sources",
+            method = "update",
+            args = list(list(visible = c(TRUE, TRUE)), list(title = "Combined Residual Comparison"))
+          )
+        )
+      )
+    )
+  )
+
+residual%>%layout(title = list(text = "Residual variation", xanchor = "left", annotations = list(
+    x = min(df_residual$R1),
+    y = max(df_residual$R2),
+    font = list(size = 10),
+    text = "company=MSFT",
+    xref = "paper",
+    yref = "paper",
+    xanchor = "center",
+    yanchor = "bottom",
+    showarrow = FALSE
+  )))
+
+```
+
+On Hindsight, it is pretty consistent that both sources present anomolous observations on the dates of March 10, April 4 and June 10. Probable reasons could include sudden heat/cold snaps or due to temporary weather disturbances like calamities. However, standalone anomalies can be inferred on June 14th for source 1, while source 2 constitutes anomalous observations on July 14 th and November 2nd. This can be due to misrepresentation or data entry errors although a micro level analysis in terms of hourly trend can be vital. Saying as such, let us analyse the base plot on March 10th for example. 
+```{r}
+base_plot
+```
+Though there are no discernible shock events on the dates, the outliers from the remainder plot are indicative of potential source measurement errors or inadequacy in the capture of patterns or seasonality for the period based on the method of decompoisition used. We now go on to use a more robust method of anomaly inference, based on an Isolation Forest algorithm. The Isolation forest segment is done in python due to package quality issues in R.
+
+```{python}
+
+import pandas as pd
+import os
+import numpy as np 
+from sklearn.preprocessing import StandardScaler
+model = IsolationForest(contamination=0.05)  # Adjust contamination based on your dataset\
+
+data = combined_df
+
+scaler = StandardScaler()
+
+temp = data["Temp.x"]
+tempy = data["Temp.y"]
+
+np_scaled = scaler.fit_transform(temp.values.reshape(-1, 1))
+np_scaled_y = scaler.fit_transform(tempy.values.reshape(-1, 1))
+
+model.fit(np_scaled)
+
+model.fit(np_scaled_y)
+
+data['anomaly'] = model.predict(np_scaled)
+
+data['anomaly_y'] = model.predict(np_scaled_y)
+
+data.head()
+
+data.to_csv("Anomalies.csv")
+
+```
+
+The Isolation forest algorithm helped us train an unsupervised tree based model which is robust with the fact that there is no need to profile data points based on distance measures, which cannot capture few relations. This naive assumption is followed up by a contamination fraction, which is a flag for potential proportion of outlier points present. We set it to 0.05 accounting that at least 5% are assumed to be outliers. Outliers are flagged as "-1" with normal observations flagged as 1. I read the data from the above executed python script which contains anomalous flagging. Let us go on to improvise the base visualization based on anomalous responses.
+
+Anomalies are color coded in reds for differentiating from the rest.
+
+```{r}
+anom = read.csv("Anomalies.csv")
+anom$anomaly = as.factor(anom$anomaly)
+anom$anomaly_y = as.factor(anom$anomaly_y)
+
+anom <- anom %>%
+  mutate(Color1 = case_when(
+    anomaly == "1" ~ "Yellow",
+    anomaly == "-1" ~ "Red"
+  ),
+  Color2 = case_when(
+    anomaly_y == "1" ~ "Green",
+    anomaly_y == "-1" ~ "Brown"
+  ))
+
+
+plot_ly(anom, type = 'scatter', mode = 'lines') %>%
+  add_trace(x = ~Date, y = ~Temp.x, name = 'Temp.x', visible = TRUE,marker = list(color = ~Color1)) %>%
+  add_trace(x = ~Date, y = ~Temp.y, name = 'Temp.y', visible = FALSE,marker = list(color = ~Color2)) %>%
+  layout(
+    title = 'Anomaly Variation based on Isolation Forest',
+    xaxis = list(
+      rangeslider = list(visible = TRUE),
+      rangeselector = list(
+        buttons = list(
+          list(count = 1, label = "1D", step = "day", stepmode = "backward"),
+          list(count = 1, label = "1m", step = "month", stepmode = "backward"),
+          list(count = 6, label = "6m", step = "month", stepmode = "backward"),
+          list(count = 1, label = "1y", step = "year", stepmode = "backward"),
+          list(step = "all")
+        )
+      )
+    ),
+    updatemenus = list(
+      list(
+        type = "buttons",
+        x = 4.05,
+        y = 0.8,
+        buttons = list(
+          list(
+            label = "Source 1",
+            method = "update",
+            args = list(list(visible = c(TRUE, FALSE)), list(title = "Source 1 Variation"))
+          ),
+          list(
+            label = "Source 2",
+            method = "update",
+            args = list(list(visible = c(FALSE, TRUE)), list(title = "Source 2 Variation"))
+          ),
+          list(
+            label = "Show Both Sources",
+            method = "update",
+            args = list(list(visible = c(TRUE, TRUE)), list(title = "Combined Comparison"))
+          )
+        )
+      )
+    )
+  )
+
+```
+
+Upnext let us analyse how similar both sources are. With their time series nature despite being mapped to continuous responses, suitable transformations have to be done to accommodate the temporal characteristics. Let us split this temporal data into monthly windows after smoothing up day to day data. The maximum temperature across a day is taken rather than going about hourly data. This is done so as to find similarities based on peak activity. Hourly data would have been taken as such had we obtained sub hourly data. With API call restrictions that was rendered impossible. As such let us obtain peak temperature for the days. Starting from the 23rd of November 2022, we will go on to create monthly windows. This is done for both sources of data. We are interested to find similarities in this temporally smoothed window. 
+Temporal clustering can help discover patterns as well as in the context of weather extreme events like climate change impacts as well as energy demand forecasting can be undertaken with the similarity results as a precursor. 
+
+The approach is to compress based on daily peaks followed by binning into windows of months. For each window across the sources, we go on to pivot and cluster them by virtue of separation using the Dynamic Time Warping measure. The DTW measure is chosen as opposed to Euclidean measure as it plies well with regards to temporal split as well as accounting the fact that windows based on months maybe unequal due to the varying number of days in each month as well as accounting for any parsing information loss.
+
+The DTW distance matrix is calculated following which each of this windowed-time series data is hierarchically clustered. K means suffers from issues with compulsions on scaling thereby compensating the nature of fluctuations and peaks.
+
+
+```{r}
+
+combined_df$Date = as.POSIXct(combined_df$Date)
+
+typeof(combined_df$Date)
+
+monthly_df_x <- combined_df %>%
+  group_by(Date) %>%
+  summarise(MaxTemp_x = max(Temp.x))
+
+monthly_df_y <- combined_df %>%
+  group_by(Date) %>%
+  summarise(MaxTemp_y = max(Temp.y))
+
+
+monthly_df <- merge(monthly_df_x, monthly_df_y , by.x = "Date" , by.y = "Date")
+
+monthly_df <- monthly_df %>%
+  mutate(Window = case_when(
+    between(Date, as.POSIXct("2022-11-23"), as.POSIXct("2022-12-23")) ~ "Window 1",
+    between(Date, as.POSIXct("2022-12-23"), as.POSIXct("2023-01-23")) ~ "Window 2",
+    between(Date, as.POSIXct("2023-01-23"), as.POSIXct("2023-02-23")) ~ "Window 3",
+    between(Date, as.POSIXct("2023-02-23"), as.POSIXct("2023-03-23")) ~ "Window 4",
+    between(Date, as.POSIXct("2023-03-23"), as.POSIXct("2023-04-23")) ~ "Window 5",
+    between(Date, as.POSIXct("2023-04-23"), as.POSIXct("2023-05-23")) ~ "Window 6",
+    between(Date, as.POSIXct("2023-05-23"), as.POSIXct("2023-06-23")) ~ "Window 7",
+    between(Date, as.POSIXct("2023-06-23"), as.POSIXct("2023-07-23")) ~ "Window 8",
+    between(Date, as.POSIXct("2023-07-23"), as.POSIXct("2023-08-23")) ~ "Window 9",
+    between(Date, as.POSIXct("2023-08-23"), as.POSIXct("2023-09-23")) ~ "Window 10",
+    between(Date, as.POSIXct("2023-09-23"), as.POSIXct("2023-10-23")) ~ "Window 11",
+    between(Date, as.POSIXct("2023-10-23"), as.POSIXct("2023-11-23")) ~ "Window 12"
+    
+  ))
+
+
+
+
+library(TSclust)
+library(data.table)
+library(reshape2)
+
+
+pivoted_data_x <- t(dcast(as.data.table(monthly_df), Window ~ Date, value.var = "MaxTemp_x"))
+
+pivoted_data_y <- t(dcast(as.data.table(monthly_df), Window ~ Date, value.var = "MaxTemp_y"))
+
+colnames(pivoted_data_x) = paste(pivoted_data_x[1,] , "Max_Temp_X" , sep = " :")
+
+colnames(pivoted_data_y) = paste(pivoted_data_y[1,] , "Max_Temp_Y" , sep = " :")
+
+pivoted_data_x = as.data.frame(pivoted_data_x[-1,])
+
+pivoted_data_y = as.data.frame(pivoted_data_y[-1,])
+
+df_windows = data.frame(matrix(ncol = 0, nrow =0))
+
+cbind(df_windows, na.omit(pivoted_data_x[,2]))
+
+colnames(df_windows) = c(colnames(pivoted_data_x),colnames(pivoted_data_y))
+
+View(df_windows)
+
+df_windows <- list()
+
+
+for(i in 1:ncol(pivoted_data_x))
+{
+  
+  tempx = na.omit(pivoted_data_x[,i])
+  tempy = na.omit(pivoted_data_y[,i])
+  
+  df_windows[[2*i -1]] = as.numeric(tempx)
+  df_windows[[2*i]] = as.numeric(tempy)
+  
+  
+}
+
+length(df_windows)
+
+df_windows
+
+dtw_distances <- matrix(NA, nrow = length(df_windows), ncol = length(df_windows))
+
+for (i in seq_along(df_windows)) {
+  for (j in seq_along(df_windows)) {
+    dtw_result <- dtw::dtw(df_windows[[i]], df_windows[[j]])
+    dtw_distances[i, j] <- dtw_result$distance
+  }
+}
+
+dtw_distances
+
+library(dtwclust)
+
+
+
+pivoted_data_y <- dcast(as.data.table(monthly_df), Window ~ Date, value.var = "MaxTemp_y")
+
+View(pivoted_data_y)
+
+pivoted_data_x[complete.cases(pivoted_data_x),]
+
+View(pivoted_data_x)
+
+
+complete.cases()
+
+
+df_ts <- as.data.frame(cbind(ts_data1, ts_data2))
+
+df_ts$ts_data1 = as.numeric(df_ts$ts_data1)
+
+df_ts$ts_data2 = as.numeric(df_ts$ts_data2)
+
+dist_dtw <- diss((df_windows),METHOD = "DTWARP")
+
+hc <- hclust(dist_dtw, method = "complete")
+
+plot(hc)
+
+clusters <- cutree(hc, k = 3)
+
+clusters
+
+df_clus_res <- data.frame(ID = character(),
+                          cluster = integer())# Ensure strings are not converted to factors
+
+window_names = as.vector(rbind( colnames(pivoted_data_x), colnames(pivoted_data_y)))
+
+# Iterate through clusters
+for (i in 1:length(clusters)) {
+  # Create a row
+  new_row <- data.frame(ID = window_names[i], cluster = clusters[i])
+  new_row
+  
+  # Append the row to the dataframe
+  df_clus_res <- rbind(df_clus_res, new_row)
+}
+
+df_clus_res$tsobj = df_windows
+
+
+
+
+
+
+
+
+
+```
+
+
+Let us go on to visualise how these temporal windows are clustered with one another.
+
+```{r}
+
+cluster1 = df_clus_res[df_clus_res$cluster=="1",]
+
+p = plot_ly(cluster1, type = 'scatter', mode = 'lines')
+
+for(i in 1:nrow(cluster1))
+{  
+  
+temp <- data.frame("Index" = cluster1$ID[i],"Day_ID" = c(1:length(cluster1$tsobj[[i]])), "Max_Temp" = cluster1$tsobj[[i]])
+
+
+p = p%>%add_trace(data =temp ,x = ~Day_ID, y = ~Max_Temp, name = ~Index, visible = TRUE)
+
+}
+
+
+p%>% layout(title = 'Windows in Cluster 1')
+
+```
+
+```{r}
+
+cluster2 = df_clus_res[df_clus_res$cluster=="2",]
+
+
+p = plot_ly(cluster2, type = 'scatter', mode = 'lines')
+
+for(i in 1:nrow(cluster2))
+{  
+  
+temp <- data.frame("Index" = cluster2$ID[i],"Day_ID" = c(1:length(cluster2$tsobj[[i]])), "Max_Temp" = cluster2$tsobj[[i]])
+
+
+p = p%>%add_trace(data =temp ,x = ~Day_ID, y = ~Max_Temp, name = ~Index, visible = TRUE)
+
+}
+
+
+p%>% layout(title = 'Windows in Cluster 2')
+
+```
+
+```{r}
+
+cluster3 = df_clus_res[df_clus_res$cluster=="3",]
+
+
+p = plot_ly(cluster3, type = 'scatter', mode = 'lines')
+
+for(i in 1:nrow(cluster3))
+{  
+  
+temp <- data.frame("Index" = cluster3$ID[i],"Day_ID" = c(1:length(cluster2$tsobj[[i]])), "Max_Temp" = cluster2$tsobj[[i]])
+
+
+p = p%>%add_trace(data =temp ,x = ~Day_ID, y = ~Max_Temp, name = ~Index, visible = TRUE)
+
+}
+
+
+p%>% layout(title = 'Windows in Cluster 3')
+
+
+```
+
+As such it is possible to understand the similarity of each temporal window with one another. Further analysis can be done based on this as a precursor.
